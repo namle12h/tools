@@ -1,9 +1,10 @@
 import * as XLSX from "xlsx";
 import type { JobItem, PORecord, PlanRow, ScheduleResult } from "../types";
 
-function toNumber(value: unknown): number {
+function toNumber(value: unknown, integer = false): number {
   const n = typeof value === "number" ? value : Number(String(value ?? "").replace(/[,\s]/g, ""));
-  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, integer ? Math.floor(n) : n);
 }
 
 function toText(value: unknown): string {
@@ -34,6 +35,12 @@ const HEADER_ALIASES: Record<string, keyof PORecord | "frontDm" | "backDm" | "it
   back: "backDm",
   dmtruoc: "frontDm",
   dmsau: "backDm",
+  uutien: "priority",
+  thuTu: "priority",
+  thutu: "priority",
+  lot: "batch",
+  lo: "batch",
+  phanlo: "batch",
 };
 
 export function parseExcelRecords(file: File): Promise<PORecord[]> {
@@ -68,6 +75,8 @@ export function parseExcelRecords(file: File): Promise<PORecord[]> {
 
             const record: Partial<PORecord> = {
               id: `row-${index + 1}`,
+              priority: index + 1,
+              batch: "",
               po: "",
               itemCode: "",
               color: "",
@@ -80,7 +89,9 @@ export function parseExcelRecords(file: File): Promise<PORecord[]> {
               const mapped = HEADER_ALIASES[header.norm];
               if (!mapped) continue;
               const value = normalizedRow[header.norm];
-              if (mapped === "quantity" || mapped === "frontDm" || mapped === "backDm") {
+              if (mapped === "quantity" || mapped === "priority") {
+                (record[mapped] as number | undefined) = toNumber(value, true);
+              } else if (mapped === "frontDm" || mapped === "backDm") {
                 (record[mapped] as number | undefined) = toNumber(value);
               } else {
                 (record[mapped] as string | undefined) = toText(value);
@@ -106,6 +117,11 @@ export function exportScheduleToExcel(result: ScheduleResult, rows: PORecord[]):
   const summarySheet = XLSX.utils.json_to_sheet(
     result.teamDays.flatMap((day) =>
       day.rows.map((row) => ({
+        Uu_tien: row.priority,
+        Lo: row.batch,
+        Nhom_ghep: row.groupId ?? "",
+        Tong_nhom: row.groupTotalQty ?? "",
+        Luot_nhom: row.groupRounds ?? "",
         Ngay: row.date,
         Thu: row.weekday,
         To: row.teamName,
@@ -125,6 +141,11 @@ export function exportScheduleToExcel(result: ScheduleResult, rows: PORecord[]):
 
   const teamSheet = XLSX.utils.json_to_sheet(
     result.rows.map((row) => ({
+      Uu_tien: row.priority,
+      Lo: row.batch,
+      Nhom_ghep: row.groupId ?? "",
+      Tong_nhom: row.groupTotalQty ?? "",
+      Luot_nhom: row.groupRounds ?? "",
       To: row.teamName,
       Ban: row.tables,
       Ngay: row.date,
@@ -145,6 +166,8 @@ export function exportScheduleToExcel(result: ScheduleResult, rows: PORecord[]):
 
   const inputSheet = XLSX.utils.json_to_sheet(
     rows.map((row) => ({
+      "Uu tien": row.priority,
+      Lo: row.batch,
       PO: row.po,
       "Ma hang": row.itemCode,
       "Mau vai": row.color,
@@ -161,8 +184,8 @@ export function exportScheduleToExcel(result: ScheduleResult, rows: PORecord[]):
 export function downloadTemplate(): void {
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet([
-    ["PO", "Mã hàng", "Màu vải", "Số lượng", "FRONT", "BACK"],
-    ["PO001", "1105689", "HCH", 7200, 16, 18],
+    ["Ưu tiên", "Lô", "PO", "Mã hàng", "Màu vải", "Số lượng", "FRONT", "BACK"],
+    [1, "Lô A", "PO001", "1105689", "HCH", 7200, 16, 18],
   ]);
   XLSX.utils.book_append_sheet(workbook, sheet, "PO_Mau");
   XLSX.writeFile(workbook, "mau-nhap-po.xlsx");

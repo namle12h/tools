@@ -14,6 +14,8 @@ export interface HolidayItem {
 
 export interface PORecord {
   id: string;
+  priority: number;
+  batch: string;
   po: string;
   itemCode: string;
   color: string;
@@ -25,6 +27,8 @@ export interface PORecord {
 export interface JobItem {
   id: string;
   rowId: string;
+  priority: number;
+  batch: string;
   po: string;
   itemCode: string;
   color: string;
@@ -45,6 +49,12 @@ export interface PlanRow {
   teamName: string;
   tables: number;
   type: PlanType;
+  priority: number;
+  batch: string;
+  sourceTeamName?: string;
+  groupId?: string;
+  groupTotalQty?: number;
+  groupRounds?: number;
   po: string;
   itemCode: string;
   color: string;
@@ -65,6 +75,7 @@ export interface TeamDaySummary {
   teamId: number;
   teamName: string;
   tables: number;
+  capacityMinutes: number;
   rows: PlanRow[];
   mainMinutes: number;
   extraMinutes: number;
@@ -82,6 +93,7 @@ export interface ScheduleResult {
 
 export interface AppSettings {
   minutesPerDay: number;
+  dailyMinutes: Record<string, number>;
   startDate: string;
   workdays: number[];
   holidays: HolidayItem[];

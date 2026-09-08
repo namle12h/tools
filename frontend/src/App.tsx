@@ -4,6 +4,9 @@ import { buildMonthGrid, loadVietnamHolidays, normalizeHolidayList } from "./uti
 import { formatVNDate, monthKey, parseDateInput, toDateInputValue, weekdayLabel, weekdayFromDate } from "./utils/date";
 import type { AppSettings, HolidayItem, PORecord, PlanRow, ScheduleResult, TeamConfig } from "./types";
 import { buildSchedule, summarizeJobs } from "./utils/planning";
+import { AppHeader } from "./components/AppHeader";
+import { PODataTable } from "./components/PODataTable";
+import { ProgressBar } from "./components/ProgressBar";
 
 type TabKey = "config" | "calendar" | "input" | "plan" | "team" | "report";
 
@@ -22,7 +25,8 @@ function loadInitialState() {
   const today = new Date();
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const defaultSettings: AppSettings = {
-    minutesPerDay: 480,
+    minutesPerDay: 483,
+    dailyMinutes: {},
     startDate: toDateInputValue(start),
     workdays: DEFAULT_WORKDAYS,
     holidays: [],
@@ -72,10 +76,15 @@ function loadInitialState() {
       settings: {
         ...defaultSettings,
         ...parsed.settings,
+        dailyMinutes: parsed.settings?.dailyMinutes ?? {},
         teams: parsed.settings?.teams?.length ? parsed.settings.teams : defaultSettings.teams,
         workdays: parsed.settings?.workdays?.length ? parsed.settings.workdays : defaultSettings.workdays,
       },
-      rows: parsed.rows ?? [],
+      rows: (parsed.rows ?? []).map((row, index) => ({
+        ...row,
+        priority: row.priority ?? index + 1,
+        batch: row.batch ?? "",
+      })),
       tab: parsed.tab ?? "config",
       visibleMonth: parsed.visibleMonth ?? monthKey(start),
       selectedDay: parsed.selectedDay ?? defaultSettings.startDate,
@@ -108,6 +117,15 @@ function numberValue(value: string, fallback = 0): number {
   return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : fallback;
 }
 
+function decimalValue(value: string, fallback = 0): number {
+  const n = Number(value.replace(",", "."));
+  return Number.isFinite(n) ? Math.max(0, n) : fallback;
+}
+
+function displayNumber(value: number, digits = 2): string {
+  return value.toLocaleString("vi-VN", { maximumFractionDigits: digits });
+}
+
 function dayLabelFromDate(dateValue: string) {
   return `${weekdayLabel(weekdayFromDate(dateValue))} ${formatVNDate(dateValue)}`;
 }
@@ -123,6 +141,7 @@ export default function App() {
   const [customHolidayDate, setCustomHolidayDate] = useState(initial.customHolidayDate);
   const [customHolidayName, setCustomHolidayName] = useState("");
   const [teamFilter, setTeamFilter] = useState(initial.teamFilter);
+  const [decimalDrafts, setDecimalDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>("");
 
@@ -243,6 +262,8 @@ export default function App() {
       ...current,
       {
         id: `row-${current.length + 1}`,
+        priority: current.length + 1,
+        batch: "",
         po: "",
         itemCode: "",
         color: "",
@@ -261,15 +282,40 @@ export default function App() {
     });
   }
 
+  function updateDecimalDraft(index: number, field: "frontDm" | "backDm", value: string) {
+    const row = rows[index];
+    if (!row) return;
+    const key = `${row.id}-${field}`;
+    setDecimalDrafts((current) => ({ ...current, [key]: value }));
+    if (/^\d*([.,]\d*)?$/.test(value) && value !== "" && !/[.,]$/.test(value)) {
+      updatePORow(index, { [field]: decimalValue(value) });
+    }
+  }
+
+  function commitDecimalDraft(index: number, field: "frontDm" | "backDm") {
+    const row = rows[index];
+    if (!row) return;
+    const key = `${row.id}-${field}`;
+    const draft = decimalDrafts[key];
+    if (draft !== undefined) {
+      updatePORow(index, { [field]: decimalValue(draft) });
+      setDecimalDrafts((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  }
+
   function removePORow(index: number) {
     setRows((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   function generateSampleRows() {
     setRows([
-      { id: "row-1", po: "PO2401", itemCode: "1105689", color: "HCH", quantity: 7200, frontDm: 16, backDm: 18 },
-      { id: "row-2", po: "PO2402", itemCode: "1105690", color: "DEN", quantity: 4800, frontDm: 25, backDm: 0 },
-      { id: "row-3", po: "PO2403", itemCode: "1105691", color: "TRANG", quantity: 9600, frontDm: 14, backDm: 15 },
+      { id: "row-1", priority: 1, batch: "Lô A", po: "PO2401", itemCode: "1105689", color: "HCH", quantity: 7200, frontDm: 16, backDm: 18 },
+      { id: "row-2", priority: 2, batch: "Lô A", po: "PO2402", itemCode: "1105690", color: "DEN", quantity: 4800, frontDm: 25.4, backDm: 0 },
+      { id: "row-3", priority: 3, batch: "Lô B", po: "PO2403", itemCode: "1105691", color: "TRANG", quantity: 9600, frontDm: 14, backDm: 15 },
     ]);
     setTab("input");
   }
@@ -282,56 +328,18 @@ export default function App() {
     exportScheduleToExcel(schedule, rows);
   }
 
-  function renderProgress(mainMinutes: number, extraMinutes: number) {
-    const mainWidth = Math.min(100, (mainMinutes / 480) * 100);
-    const extraWidth = Math.min(100 - mainWidth, (extraMinutes / 480) * 100);
-    const total = mainMinutes + extraMinutes;
-    return (
-      <div className="progress-shell">
-        <div className="progress-main" style={{ width: `${mainWidth}%` }} />
-        {extraMinutes > 0 ? <div className="progress-extra" style={{ width: `${extraWidth}%` }} /> : null}
-        <div className="progress-label">{Math.min(100, Math.round((total / 480) * 100))}%</div>
-      </div>
-    );
-  }
-
   return (
     <div className="app-shell">
-      <div className="topbar">
-        <div className="brand">
-          <div className="brand-mark">X</div>
-          <div>
-            <div className="brand-title">Xưởng in lụa</div>
-            <div className="brand-subtitle">Lập kế hoạch theo tổ, theo ngày, theo PO</div>
-          </div>
-        </div>
-        <div className="topbar-actions">
-          <button className="ghost-button" onClick={() => setRows([])}>
-            Xóa PO
-          </button>
-          <button className="ghost-button" onClick={downloadTemplate}>
-            Tải mẫu Excel
-          </button>
-          <button className="primary-button" onClick={exportExcel} disabled={!schedule}>
-            Xuất kế hoạch
-          </button>
-        </div>
-      </div>
-
-      <div className="tabs">
-        {tabs.map((item) => (
-          <button key={item.key} className={cn("tab-pill", tab === item.key && "active")} onClick={() => setTab(item.key)}>
-            <span className="tab-icon">{item.icon}</span>
-            <span>{item.label}</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="formula-banner">
-        <strong>Công thức:</strong> Lượt/ngày = FLOOR(Phút/ngày ÷ ĐM) · NS/ngày = Lượt x Số bàn · Phút dư {'->'} ghép mã phụ
-      </div>
-
-      {error ? <div className="error-banner">{error}</div> : null}
+      <AppHeader
+        tabs={tabs}
+        activeTab={tab}
+        onTabChange={(key) => setTab(key as TabKey)}
+        onClearPO={() => setRows([])}
+        onDownloadTemplate={downloadTemplate}
+        onExport={exportExcel}
+        canExport={Boolean(schedule)}
+        error={error}
+      />
 
       {tab === "config" ? (
         <section className="grid two-col">
@@ -343,8 +351,20 @@ export default function App() {
                 <input
                   type="number"
                   value={settings.minutesPerDay}
-                  onChange={(e) => setSettings((current) => ({ ...current, minutesPerDay: numberValue(e.target.value, 480) }))}
+                  onChange={(e) => setSettings((current) => ({ ...current, minutesPerDay: numberValue(e.target.value, 483) }))}
                 />
+              </label>
+              <label>
+                <span>Phút ngày đang chọn / tăng ca</span>
+                <input
+                  type="number"
+                  value={settings.dailyMinutes[selectedDay] ?? settings.minutesPerDay}
+                  onChange={(e) => {
+                    const minutes = numberValue(e.target.value, settings.minutesPerDay);
+                    setSettings((current) => ({ ...current, dailyMinutes: { ...current.dailyMinutes, [selectedDay]: minutes } }));
+                  }}
+                />
+                <small className="muted">{dayLabelFromDate(selectedDay)} · nhập 483, 540, 600...</small>
               </label>
               <label>
                 <span>Số tổ</span>
@@ -538,7 +558,7 @@ export default function App() {
               <div className="dropzone-copy">
                 <div className="dropzone-icon">📊</div>
                 <strong>Kéo thả hoặc click chọn file Excel</strong>
-                <span>Cột cần có: PO · Mã hàng · Màu vải · Số lượng · FRONT · BACK</span>
+                <span>Cột: Ưu tiên · Lô · PO · Mã hàng · Màu vải · Số lượng · FRONT · BACK</span>
               </div>
             </div>
             <div className="input-actions">
@@ -564,40 +584,14 @@ export default function App() {
               </div>
             </div>
 
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>PO</th>
-                    <th>Mã hàng</th>
-                    <th>Màu vải</th>
-                    <th>Số lượng</th>
-                    <th>ĐM Trước</th>
-                    <th>ĐM Sau</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.length ? (
-                    rows.map((row, index) => (
-                      <tr key={row.id}>
-                        <td><input value={row.po} onChange={(e) => updatePORow(index, { po: e.target.value })} /></td>
-                        <td><input value={row.itemCode} onChange={(e) => updatePORow(index, { itemCode: e.target.value })} /></td>
-                        <td><input value={row.color} onChange={(e) => updatePORow(index, { color: e.target.value })} /></td>
-                        <td><input type="number" value={row.quantity} onChange={(e) => updatePORow(index, { quantity: numberValue(e.target.value) })} /></td>
-                        <td><input type="number" value={row.frontDm} onChange={(e) => updatePORow(index, { frontDm: numberValue(e.target.value) })} /></td>
-                        <td><input type="number" value={row.backDm} onChange={(e) => updatePORow(index, { backDm: numberValue(e.target.value) })} /></td>
-                        <td><button className="danger-text" onClick={() => removePORow(index)}>Xóa</button></td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={7} className="empty-state">Chưa có dữ liệu.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <PODataTable
+              rows={rows}
+              decimalDrafts={decimalDrafts}
+              onUpdate={updatePORow}
+              onDecimalChange={updateDecimalDraft}
+              onDecimalBlur={commitDecimalDraft}
+              onRemove={removePORow}
+            />
           </div>
         </section>
       ) : null}
@@ -642,17 +636,17 @@ export default function App() {
                           <div className="muted">{teamDay.weekday} - {formatVNDate(teamDay.date)} - {teamDay.tables} bàn</div>
                         </div>
                         <div className="timeline-score">
-                          <span>{teamDay.totalMinutes}p / {settings.minutesPerDay}p</span>
+                          <span>{displayNumber(teamDay.totalMinutes)}p / {displayNumber(teamDay.capacityMinutes)}p</span>
                           <strong>{teamDay.fillRate}%</strong>
                         </div>
                       </div>
-                      {renderProgress(teamDay.mainMinutes, teamDay.extraMinutes)}
+                      <ProgressBar mainMinutes={teamDay.mainMinutes} extraMinutes={teamDay.extraMinutes} capacityMinutes={teamDay.capacityMinutes} />
                       <div className="row-mini-grid">
                         {teamDay.rows.map((row) => (
                           <div className={cn("job-chip", row.type === "Chính" ? "main" : "mix")} key={row.key}>
                             <strong>{row.type}</strong>
                             <span>{row.itemCode} / {row.color} / {row.role}</span>
-                            <small>ĐM {row.dm}p · Lượt {row.rounds} · Phút {row.minutes} · SL {row.plannedQty.toLocaleString("vi-VN")}</small>
+                            <small>Ưu tiên {row.priority} · {row.batch || "Không lô"} · {row.sourceTeamName ? `Mượn ${row.sourceTeamName} · ` : ""}{row.groupTotalQty ? `Nhóm đủ ${row.groupTotalQty.toLocaleString("vi-VN")} pcs / ${row.groupRounds ?? row.rounds} lượt · ` : ""}ĐM {displayNumber(row.dm)}p · Lượt {row.rounds} · Phút {displayNumber(row.minutes)} · SL {row.plannedQty.toLocaleString("vi-VN")}</small>
                           </div>
                         ))}
                       </div>
@@ -699,9 +693,9 @@ export default function App() {
                         <td>{row.itemCode}</td>
                         <td>{row.color}</td>
                         <td>{row.role}</td>
-                        <td>{row.dm}</td>
+                        <td>{displayNumber(row.dm)}p</td>
                         <td>{row.rounds}</td>
-                        <td>{row.minutes}</td>
+                        <td>{displayNumber(row.minutes)}p</td>
                         <td>{row.plannedQty.toLocaleString("vi-VN")}</td>
                         <td>{row.remainingEnd.toLocaleString("vi-VN")}</td>
                       </tr>
@@ -763,9 +757,9 @@ export default function App() {
                         <td>{row.itemCode}</td>
                         <td>{row.color}</td>
                         <td>{row.role}</td>
-                        <td>{row.dm}</td>
+                        <td>{displayNumber(row.dm)}p</td>
                         <td>{row.rounds}</td>
-                        <td>{row.minutes}</td>
+                        <td>{displayNumber(row.minutes)}p</td>
                         <td>{row.plannedQty.toLocaleString("vi-VN")}</td>
                         <td>{row.remainingEnd.toLocaleString("vi-VN")}</td>
                       </tr>
@@ -902,14 +896,14 @@ export default function App() {
                       <div className="timeline-head">
                         <div>
                           <strong>{teamDay.teamName}</strong>
-                          <div className="muted">{teamDay.rows.length} dòng · {teamDay.totalMinutes}p</div>
+                          <div className="muted">{teamDay.rows.length} dòng · {displayNumber(teamDay.totalMinutes)} / {displayNumber(teamDay.capacityMinutes)}p</div>
                         </div>
                         <div className="timeline-score">
                           <span>{teamDay.fillRate}%</span>
-                          <strong>{teamDay.totalMinutes}p</strong>
+                          <strong>{displayNumber(teamDay.totalMinutes)}p</strong>
                         </div>
                       </div>
-                      {renderProgress(teamDay.mainMinutes, teamDay.extraMinutes)}
+                      <ProgressBar mainMinutes={teamDay.mainMinutes} extraMinutes={teamDay.extraMinutes} capacityMinutes={teamDay.capacityMinutes} />
                     </div>
                   ))}
                 </div>
